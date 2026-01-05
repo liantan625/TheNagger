@@ -179,11 +179,11 @@ def init_database():
                 CREATE TABLE IF NOT EXISTS tasks (
                     id SERIAL PRIMARY KEY,
                     task_name TEXT NOT NULL,
-                    due_date TIMESTAMP,
+                    due_date TIMESTAMPTZ,
                     status TEXT DEFAULT 'PENDING',
                     nag_level INTEGER DEFAULT 0,
                     chat_id BIGINT,
-                    last_nag_time TIMESTAMP
+                    last_nag_time TIMESTAMPTZ
                 );
             """)
         logger.info("Database initialized successfully.")
@@ -665,9 +665,9 @@ async def main():
     else:
         logger.warning("GEMINI_API_KEY not set - natural language processing disabled")
     
-    # Set up the job queue for nagging (runs every 60 seconds)
+    # Set up the job queue for nagging (checks every 10 seconds, nags max once per 5 min per task)
     job_queue = application.job_queue
-    job_queue.run_repeating(nag_check, interval=60, first=10)
+    job_queue.run_repeating(nag_check, interval=10, first=10)
     
     logger.info("The Nagger bot is starting...")
     logger.info("Press Ctrl+C to stop.")
