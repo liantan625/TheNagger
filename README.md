@@ -1,7 +1,7 @@
 # 🔔 The Nagger
 
 A Telegram bot that accepts tasks with deadlines and sends **increasingly annoying messages** if the task is not marked as done after the deadline.
-
+Try here: https://t.me/Nagger8964Bot
 ## Features
 
 - **Natural language dates** - Add tasks using human-friendly time descriptions like "in 10 minutes" or "tomorrow at 5pm"
