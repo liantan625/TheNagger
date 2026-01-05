@@ -667,7 +667,7 @@ async def main():
     
     # Set up the job queue for nagging (runs every 60 seconds)
     job_queue = application.job_queue
-    job_queue.run_repeating(nag_check, interval=10, first=10)
+    job_queue.run_repeating(nag_check, interval=60, first=10)
     
     logger.info("The Nagger bot is starting...")
     logger.info("Press Ctrl+C to stop.")
