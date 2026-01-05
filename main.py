@@ -43,8 +43,10 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-# Database file
-DB_FILE = "nagger.db"
+
+# Database file (configurable for Railway volumes)
+# Default: /app/data/nagger.db (Railway), override with DATABASE_PATH env var
+DB_FILE = os.getenv("DATABASE_PATH", "/app/data/nagger.db")
 
 # Nag interval in minutes (don't spam every minute)
 NAG_INTERVAL_MINUTES = 5
