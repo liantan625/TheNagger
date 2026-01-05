@@ -8,7 +8,8 @@ import json
 import asyncio
 import sqlite3
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Optional
 from collections import defaultdict
 
@@ -47,6 +48,14 @@ if GEMINI_API_KEY:
 # Database file (configurable for Railway volumes)
 # Default: /app/data/nagger.db (Railway), override with DATABASE_PATH env var
 DB_FILE = os.getenv("DATABASE_PATH", "/app/data/nagger.db")
+
+# Timezone configuration - set to UTC+8 (Singapore/Malaysia/Hong Kong)
+# Override with TIMEZONE env var if needed (e.g., "America/New_York")
+LOCAL_TZ = ZoneInfo(os.getenv("TIMEZONE", "Asia/Singapore"))
+
+def get_now():
+    """Get current time in configured timezone."""
+    return datetime.now(LOCAL_TZ)
 
 # Nag interval in minutes (don't spam every minute)
 NAG_INTERVAL_MINUTES = 5
@@ -87,7 +96,7 @@ def get_nag_message(task_name: str, nag_level: int) -> str:
 
 def check_rate_limit(user_id: int) -> tuple[bool, int]:
     """Check if user has exceeded rate limit. Returns (is_allowed, remaining_requests)."""
-    now = datetime.now()
+    now = get_now()
     hour_ago = now - timedelta(hours=1)
     
     # Clean up old entries
@@ -106,7 +115,7 @@ def check_rate_limit(user_id: int) -> tuple[bool, int]:
 
 def record_llm_usage(user_id: int):
     """Record an LLM API call for rate limiting."""
-    llm_usage_tracker[user_id].append(datetime.now())
+    llm_usage_tracker[user_id].append(get_now())
 
 
 async def parse_task_with_llm(text: str) -> Optional[dict]:
@@ -117,7 +126,7 @@ async def parse_task_with_llm(text: str) -> Optional[dict]:
     try:
         model = genai.GenerativeModel('gemini-2.0-flash-lite')
         
-        current_time = datetime.now().strftime('%Y-%m-%d %H:%M')
+        current_time = get_now().strftime('%Y-%m-%d %H:%M')
         
         prompt = f"""You are a task extraction assistant. Extract the task and deadline from the user's message.
 
@@ -217,7 +226,7 @@ def get_overdue_pending_tasks() -> list:
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    now = datetime.now().isoformat()
+    now = get_now().isoformat()
     
     cursor.execute("""
         SELECT id, task_name, due_date, nag_level, chat_id, last_nag_time FROM tasks
@@ -235,7 +244,7 @@ def update_task_nag(task_id: int):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    now = datetime.now().isoformat()
+    now = get_now().isoformat()
     
     cursor.execute("""
         UPDATE tasks
@@ -386,7 +395,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         time_text,
         settings={
             'PREFER_DATES_FROM': 'future',
-            'RELATIVE_BASE': datetime.now()
+            'RELATIVE_BASE': get_now()
         }
     )
     
@@ -396,7 +405,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             full_text,
             settings={
                 'PREFER_DATES_FROM': 'future',
-                'RELATIVE_BASE': datetime.now()
+                'RELATIVE_BASE': get_now()
             }
         )
     
@@ -415,7 +424,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         task_name = "Unnamed task"
     
     # Check if the date is in the past
-    if parsed_date <= datetime.now():
+    if parsed_date <= get_now():
         await update.message.reply_text(
             "❌ That time is in the past. Set a future deadline!",
             parse_mode="Markdown"
@@ -454,7 +463,7 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     for task_id, task_name, due_date_str in tasks:
         due_date = datetime.fromisoformat(due_date_str)
-        now = datetime.now()
+        now = get_now()
         
         if due_date < now:
             status = "⚠️ OVERDUE"
@@ -538,7 +547,7 @@ async def done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def nag_check(context: ContextTypes.DEFAULT_TYPE):
     """Check for overdue tasks and send nag messages."""
-    now = datetime.now()
+    now = get_now()
     logger.info(f"Running nag check at {now.isoformat()}... Found {len(get_overdue_pending_tasks())} overdue tasks.")
     
     overdue_tasks = get_overdue_pending_tasks()
@@ -605,11 +614,11 @@ async def natural_language_handler(update: Update, context: ContextTypes.DEFAULT
         if not task_name or not due_str:
             return
         
-        # Parse the due date
-        parsed_date = datetime.strptime(due_str, "%Y-%m-%d %H:%M")
+        # Parse the due date and make it timezone-aware
+        parsed_date = datetime.strptime(due_str, "%Y-%m-%d %H:%M").replace(tzinfo=LOCAL_TZ)
         
         # Check if in past
-        if parsed_date <= datetime.now():
+        if parsed_date <= get_now():
             await update.message.reply_text(
                 "🤔 That time seems to be in the past. Try a future deadline!",
                 parse_mode="Markdown"
@@ -669,7 +678,7 @@ async def main():
     
     # Set up the job queue for nagging (runs every 60 seconds)
     job_queue = application.job_queue
-    job_queue.run_repeating(nag_check, interval=60, first=10)
+    job_queue.run_repeating(nag_check, interval=10, first=10)
     
     logger.info("The Nagger bot is starting...")
     logger.info("Press Ctrl+C to stop.")
