@@ -462,7 +462,7 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = "📋 *Your Pending Tasks:*\n\n"
     
     for task_id, task_name, due_date_str in tasks:
-        due_date = datetime.fromisoformat(due_date_str)
+        due_date = datetime.fromisoformat(due_date_str).replace(tzinfo=LOCAL_TZ)
         now = get_now()
         
         if due_date < now:
@@ -555,7 +555,7 @@ async def nag_check(context: ContextTypes.DEFAULT_TYPE):
     for task_id, task_name, due_date_str, nag_level, chat_id, last_nag_time_str in overdue_tasks:
         # Check if enough time has passed since last nag
         if last_nag_time_str:
-            last_nag_time = datetime.fromisoformat(last_nag_time_str)
+            last_nag_time = datetime.fromisoformat(last_nag_time_str).replace(tzinfo=LOCAL_TZ)
             time_since_nag = (now - last_nag_time).total_seconds() / 60  # in minutes
             
             if time_since_nag < NAG_INTERVAL_MINUTES:
