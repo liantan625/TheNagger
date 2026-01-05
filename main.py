@@ -6,13 +6,13 @@ The Nagger - A Telegram bot that harasses you about your overdue tasks.
 import os
 import json
 import asyncio
-import sqlite3
 import logging
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Optional
 from collections import defaultdict
 
+import psycopg2
 import dateparser
 from dotenv import load_dotenv
 import google.generativeai as genai
@@ -45,9 +45,15 @@ if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
 
-# Database file (configurable for Railway volumes)
-# Default: /app/data/nagger.db (Railway), override with DATABASE_PATH env var
-DB_FILE = os.getenv("DATABASE_PATH", "/app/data/nagger.db")
+# Database Connection
+DATABASE_URL = os.getenv("DATABASE_URL")
+conn = None
+
+try:
+    conn = psycopg2.connect(DATABASE_URL)
+    conn.autocommit = True
+except Exception as e:
+    logger.error(f"Failed to connect to DB: {e}")
 
 # Timezone configuration - set to UTC+8 (Singapore/Malaysia/Hong Kong)
 # Override with TIMEZONE env var if needed (e.g., "America/New_York")
@@ -166,115 +172,94 @@ If you cannot extract both a task AND a time, respond:
 
 
 def init_database():
-    """Initialize the SQLite database with the tasks table."""
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS tasks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            task_name TEXT NOT NULL,
-            due_date DATETIME NOT NULL,
-            status TEXT DEFAULT 'PENDING',
-            nag_level INTEGER DEFAULT 0,
-            chat_id INTEGER NOT NULL,
-            last_nag_time DATETIME
-        )
-    """)
-    
-    conn.commit()
-    conn.close()
-    logger.info("Database initialized successfully.")
+    """Initialize the PostgreSQL database with the tasks table."""
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tasks (
+                    id SERIAL PRIMARY KEY,
+                    task_name TEXT NOT NULL,
+                    due_date TIMESTAMP,
+                    status TEXT DEFAULT 'PENDING',
+                    nag_level INTEGER DEFAULT 0,
+                    chat_id BIGINT,
+                    last_nag_time TIMESTAMP
+                );
+            """)
+        logger.info("Database initialized successfully.")
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {e}")
 
 
 def add_task(task_name: str, due_date: datetime, chat_id: int) -> int:
     """Add a new task to the database."""
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        INSERT INTO tasks (task_name, due_date, status, nag_level, chat_id, last_nag_time)
-        VALUES (?, ?, 'PENDING', 0, ?, NULL)
-    """, (task_name, due_date.isoformat(), chat_id))
-    
-    task_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
+    with conn.cursor() as cursor:
+        cursor.execute("""
+            INSERT INTO tasks (task_name, due_date, status, nag_level, chat_id, last_nag_time)
+            VALUES (%s, %s, 'PENDING', 0, %s, NULL)
+            RETURNING id
+        """, (task_name, due_date, chat_id))
+        
+        task_id = cursor.fetchone()[0]
     
     return task_id
 
 
 def get_pending_tasks(chat_id: int) -> list:
     """Get all pending tasks for a specific chat."""
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        SELECT id, task_name, due_date FROM tasks
-        WHERE chat_id = ? AND status = 'PENDING'
-        ORDER BY due_date ASC
-    """, (chat_id,))
-    
-    tasks = cursor.fetchall()
-    conn.close()
-    
+    with conn.cursor() as cursor:
+        cursor.execute("""
+            SELECT id, task_name, due_date FROM tasks
+            WHERE chat_id = %s AND status = 'PENDING'
+            ORDER BY due_date ASC
+        """, (chat_id,))
+        
+        tasks = cursor.fetchall()
+        
     return tasks
 
 
 def get_overdue_pending_tasks() -> list:
     """Get all overdue pending tasks across all chats."""
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
+    now = get_now()
     
-    now = get_now().isoformat()
-    
-    cursor.execute("""
-        SELECT id, task_name, due_date, nag_level, chat_id, last_nag_time FROM tasks
-        WHERE status = 'PENDING' AND due_date < ?
-    """, (now,))
-    
-    tasks = cursor.fetchall()
-    conn.close()
-    
+    with conn.cursor() as cursor:
+        cursor.execute("""
+            SELECT id, task_name, due_date, nag_level, chat_id, last_nag_time FROM tasks
+            WHERE status = 'PENDING' AND due_date < %s
+        """, (now,))
+        
+        tasks = cursor.fetchall()
+        
     return tasks
 
 
 def update_task_nag(task_id: int):
     """Increment nag level and update last nag time for a task."""
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
+    now = get_now()
     
-    now = get_now().isoformat()
-    
-    cursor.execute("""
-        UPDATE tasks
-        SET nag_level = nag_level + 1, last_nag_time = ?
-        WHERE id = ?
-    """, (now, task_id))
-    
-    conn.commit()
-    conn.close()
+    with conn.cursor() as cursor:
+        cursor.execute("""
+            UPDATE tasks
+            SET nag_level = nag_level + 1, last_nag_time = %s
+            WHERE id = %s
+        """, (now, task_id))
 
 
 def mark_task_done(task_id: int) -> Optional[str]:
     """Mark a task as done and return the task name."""
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
+    with conn.cursor() as cursor:
+        # Get task name first
+        cursor.execute("SELECT task_name FROM tasks WHERE id = %s", (task_id,))
+        result = cursor.fetchone()
+        
+        if result:
+            task_name = result[0]
+            cursor.execute("""
+                UPDATE tasks SET status = 'DONE' WHERE id = %s
+            """, (task_id,))
+            return task_name
     
-    # Get task name first
-    cursor.execute("SELECT task_name FROM tasks WHERE id = ?", (task_id,))
-    result = cursor.fetchone()
-    
-    if result:
-        task_name = result[0]
-        cursor.execute("""
-            UPDATE tasks SET status = 'DONE' WHERE id = ?
-        """, (task_id,))
-        conn.commit()
-        conn.close()
-        return task_name
-    
-    conn.close()
     return None
 
 
@@ -461,8 +446,10 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     message = "📋 *Your Pending Tasks:*\n\n"
     
-    for task_id, task_name, due_date_str in tasks:
-        due_date = datetime.fromisoformat(due_date_str).replace(tzinfo=LOCAL_TZ)
+    for task_id, task_name, due_date in tasks:
+        # due_date from postgres is already datetime
+        if due_date.tzinfo is None:
+             due_date = due_date.replace(tzinfo=LOCAL_TZ)
         now = get_now()
         
         if due_date < now:
@@ -498,7 +485,7 @@ async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Create inline keyboard with task buttons
     keyboard = []
-    for task_id, task_name, due_date_str in tasks:
+    for task_id, task_name, due_date in tasks:
         # Truncate long task names for button
         display_name = task_name[:30] + "..." if len(task_name) > 30 else task_name
         keyboard.append([
@@ -552,10 +539,12 @@ async def nag_check(context: ContextTypes.DEFAULT_TYPE):
     
     overdue_tasks = get_overdue_pending_tasks()
     
-    for task_id, task_name, due_date_str, nag_level, chat_id, last_nag_time_str in overdue_tasks:
+    for task_id, task_name, due_date, nag_level, chat_id, last_nag_time in overdue_tasks:
         # Check if enough time has passed since last nag
-        if last_nag_time_str:
-            last_nag_time = datetime.fromisoformat(last_nag_time_str).replace(tzinfo=LOCAL_TZ)
+        if last_nag_time:
+            # last_nag_time from postgres is already datetime
+            if last_nag_time.tzinfo is None:
+                last_nag_time = last_nag_time.replace(tzinfo=LOCAL_TZ)
             time_since_nag = (now - last_nag_time).total_seconds() / 60  # in minutes
             
             if time_since_nag < NAG_INTERVAL_MINUTES:
