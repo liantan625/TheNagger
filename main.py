@@ -690,5 +690,24 @@ async def main():
             await application.stop()
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
+# ... all your imports and functions above ...
+
+if __name__ == '__main__':
+    # 1. Build the Application
+    application = ApplicationBuilder().token(TOKEN).build()
+
+    # 2. Add your handlers (Make sure these match your actual function names!)
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("add", add_task))
+    application.add_handler(CommandHandler("done", complete_task))
+    # ... add any other handlers you have ...
+
+    # 3. Start the Scheduler (Background Logic)
+    scheduler = BackgroundScheduler()
+    # Make sure 'check_tasks' matches the name of your checking function
+    scheduler.add_job(check_tasks, 'interval', minutes=1) 
+    scheduler.start()
+
+    # 4. THE IMPORTANT PART: Run Polling (This blocks forever)
+    print("Bot is running...")
+    application.run_polling()
