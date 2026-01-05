@@ -539,16 +539,18 @@ async def nag_check(context: ContextTypes.DEFAULT_TYPE):
     
     overdue_tasks = get_overdue_pending_tasks()
     
-    for task_id, task_name, due_date, nag_level, chat_id, last_nag_time in overdue_tasks:
+    for task_id, task_name, due_date_str, nag_level, chat_id, last_nag_time_str in overdue_tasks:
         # Check if enough time has passed since last nag
-        if last_nag_time:
-            # last_nag_time from postgres is already datetime
+        if last_nag_time_str:
+            # SQLite stores datetime as ISO string, need to parse it
+            last_nag_time = datetime.fromisoformat(last_nag_time_str)
+            # Make timezone-aware if it isn't already
             if last_nag_time.tzinfo is None:
                 last_nag_time = last_nag_time.replace(tzinfo=LOCAL_TZ)
             time_since_nag = (now - last_nag_time).total_seconds() / 60  # in minutes
             
             if time_since_nag < NAG_INTERVAL_MINUTES:
-                logger.debug(f"Skipping nag for task {task_id}, only {time_since_nag:.1f} min since last nag")
+                logger.info(f"Skipping nag for task {task_id}, only {time_since_nag:.1f} min since last nag (need {NAG_INTERVAL_MINUTES} min)")
                 continue
         
         # Get appropriate nag message
@@ -667,7 +669,7 @@ async def main():
     
     # Set up the job queue for nagging (checks every 10 seconds, nags max once per 5 min per task)
     job_queue = application.job_queue
-    job_queue.run_repeating(nag_check, interval=300, first=10)
+    job_queue.run_repeating(nag_check, interval=10, first=10)
     
     logger.info("The Nagger bot is starting...")
     logger.info("Press Ctrl+C to stop.")
